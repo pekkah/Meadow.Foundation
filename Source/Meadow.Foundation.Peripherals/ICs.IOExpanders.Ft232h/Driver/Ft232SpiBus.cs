@@ -210,7 +210,7 @@ public sealed class Ft232SpiBus : IFt232Bus, ISpiBus, IDisposable
             Handle,
             MemoryMarshal.GetReference(readBuffer),
             readBuffer.Length,
-            out _,
+            out int read,
             options
             );
 

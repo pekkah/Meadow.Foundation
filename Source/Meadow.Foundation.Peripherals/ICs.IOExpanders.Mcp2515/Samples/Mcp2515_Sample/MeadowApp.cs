@@ -3,7 +3,7 @@ using Meadow.Foundation.ICs.IOExpanders;
 
 public class MeadowApp : App<Windows>
 {
-    private Ft232h _expander = new Ft232h();
+    private Ft232h _expander = new Ft232h(true);
     private Mcp2515 _mcp;
 
     public static async Task Main(string[] args)
@@ -16,7 +16,7 @@ public class MeadowApp : App<Windows>
         Console.WriteLine("Creating SPI Bus");
 
         var bus = _expander.CreateSpiBus();
-        _mcp = new Mcp2515(bus, _expander.Pins.C0.CreateDigitalOutputPort());
+        _mcp = new Mcp2515(bus, _expander.Pins.C0.CreateDigitalOutputPort(), CanBitRate.BitRate_250KHz);
 
         Console.WriteLine("Creating Display");
 

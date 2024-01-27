@@ -2,10 +2,16 @@
 
 public partial class Mcp2515
 {
-    internal enum Status : byte
+    internal enum InterruptStatus : byte
     {
-        RX0IF = (1 << 0),
-        RX1IF = (1 << 1)
+        NoInterrupt = 0b000,
+        Error = 0b001 << 1,
+        Wake = 0b010 << 1,
+        TXB0 = 0b011 << 1,
+        TXB1 = 0b100 << 1,
+        TXB2 = 0b101 << 1,
+        RXB0 = 0b101 << 1,
+        RXB1 = 0b111 << 1
     }
 
     internal enum Mode : byte
@@ -30,6 +36,8 @@ public partial class Mcp2515
         CANCTRL_REQOP = 0xE0,
         RX0IF = 1 << 0,
         RX1IF = 1 << 1,
+        CANSTAT_OPMODE = 0xE0,
+        CANSTAT_ICOD = 0x0E,
     }
 
     internal enum RegisterBits

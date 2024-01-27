@@ -46,11 +46,11 @@ namespace Meadow.Foundation.ICs.IOExpanders
 
                 if (value)
                 {
-                    s |= (byte)Pin.Key;
+                    s |= (byte)(ushort)Pin.Key;
                 }
                 else
                 {
-                    s &= (byte)~(byte)Pin.Key;
+                    s &= (byte)~(byte)(ushort)Pin.Key;
                 }
 
                 var result = Native.Mpsse.FT_WriteGPIO(_bus.Handle, _bus.GpioDirectionMask, s);

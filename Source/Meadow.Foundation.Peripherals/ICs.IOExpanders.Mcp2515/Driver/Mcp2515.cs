@@ -25,23 +25,23 @@ public enum CanBitRate
 
 public partial class Mcp2515 : ISpiPeripheral
 {
-    private ISpiCommunications _spiBus;
+    private ISpiCommunications _comms;
     private int[] _configParams;
 
     /// <inheritdoc/>
-    public ISpiBus SpiBus => throw new NotImplementedException();
+    public ISpiBus SpiBus { get; }
 
     /// <inheritdoc/>
-    public SpiClockConfiguration.Mode DefaultSpiBusMode => throw new NotImplementedException();
+    public SpiClockConfiguration.Mode DefaultSpiBusMode => SpiClockConfiguration.Mode.Mode0;
 
     /// <inheritdoc/>
-    public SpiClockConfiguration.Mode SpiBusMode { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+    public SpiClockConfiguration.Mode SpiBusMode { get; set; }
 
     /// <inheritdoc/>
-    public Frequency DefaultSpiBusSpeed => new Frequency(10, Frequency.UnitType.Megahertz);
+    public Frequency DefaultSpiBusSpeed => new Frequency(5, Frequency.UnitType.Megahertz);
 
     /// <inheritdoc/>
-    public Frequency SpiBusSpeed { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+    public Frequency SpiBusSpeed { get; set; }
 
     private static int[][] _configTable = new int[][]
     {
@@ -63,13 +63,17 @@ public partial class Mcp2515 : ISpiPeripheral
 
     public Mcp2515(ISpiBus spiBus, IDigitalOutputPort chipSelect, CanBitRate canBitRate = CanBitRate.BitRate_500KHz, OscillatorFrequency oscillatorFreq = OscillatorFrequency.MHz_10)
     {
+        SpiBus = spiBus;
+
         _configParams = GetConfigurationForSettings(oscillatorFreq, canBitRate) ?? throw new NotSupportedException();
 
-        _spiBus = new SpiCommunications(spiBus, chipSelect, DefaultSpiBusSpeed);
+        _comms = new SpiCommunications(spiBus, chipSelect, DefaultSpiBusSpeed);
 
         Initialize();
 
         SetBitRate(canBitRate);
+
+        SetMode(Mode.Normal);
     }
 
     private int[]? GetConfigurationForSettings(OscillatorFrequency oscillatorFreq, CanBitRate canBusSpeed)
@@ -80,12 +84,27 @@ public partial class Mcp2515 : ISpiPeripheral
             {
                 if (_configTable[r][1] == (int)canBusSpeed)
                 {
+                    Resolver.Log.Info($"Config: {string.Join(' ', _configTable[r])}");
                     return _configTable[r];
                 }
             }
         }
 
         return null;
+    }
+
+    private void ReportRegisters(Registers start, int count)
+    {
+        Span<byte> registers = stackalloc byte[count];
+        ReadRegisters(start, registers);
+
+        for (var i = 0; i < registers.Length; i++)
+        {
+            var name = (Registers)((byte)start + i);
+
+            Resolver.Log.Info($"{name}: 0x{registers[i]:x2}");
+        }
+
     }
 
     private CanFrame? ReadFrame(Registers firstRegister)
@@ -127,14 +146,17 @@ public partial class Mcp2515 : ISpiPeripheral
     public CanFrame? Read()
     {
         var status = ReadStatus();
-        if ((status & Status.RX0IF) != 0)
+
+        Resolver.Log.Info($"status: 0x{(byte)status.interrupt:x2}");
+
+        if ((status.interrupt & InterruptStatus.RXB0) != 0)
         {
             var f = ReadFrame(Registers.RXB0CTRL);
             // clear the receive buffer interrupt bit
             ModifyRegister(Registers.CANINTF, BitMasks.RX0IF, RegisterBits.Clear);
             return f;
         }
-        else if ((status & Status.RX1IF) != 0)
+        else if ((status.interrupt & InterruptStatus.RXB1) != 0)
         {
             var f = ReadFrame(Registers.RXB1CTRL);
             ModifyRegister(Registers.CANINTF, BitMasks.RX1IF, RegisterBits.Clear);
@@ -154,6 +176,8 @@ public partial class Mcp2515 : ISpiPeripheral
 
     private void Initialize()
     {
+        SetMode(Mode.Config);
+
         var emptyControlBuffer = new byte[14];
         WriteRegister(Registers.TXB0CTRL, emptyControlBuffer);
         WriteRegister(Registers.TXB1CTRL, emptyControlBuffer);
@@ -180,8 +204,20 @@ public partial class Mcp2515 : ISpiPeripheral
         ModifyRegister(Registers.RXB1CTRL,
             BitMasks.RXBnCTRL_RXM | BitMasks.RXB1CTRL_FILHIT,
             RegisterBits.RXBnCTRL_RXM_STDEXT | RegisterBits.RXB1CTRL_FILHIT);
+    }
 
-        SetMode(Mode.Normal);
+    private byte GetTransmitErrorCount()
+    {
+        Span<byte> buffer = stackalloc byte[1];
+        ReadRegisters(Registers.TEC, buffer);
+        return buffer[0];
+    }
+
+    private byte GetReceivedErrorCount()
+    {
+        Span<byte> buffer = stackalloc byte[1];
+        ReadRegisters(Registers.REC, buffer);
+        return buffer[0];
     }
 
     private void SetMode(Mode mode)
@@ -193,25 +229,37 @@ public partial class Mcp2515 : ISpiPeripheral
 
     private void SetBitRate(CanBitRate bitrate)
     {
-        var cnf1 = (byte)(((_configParams[6] - 1) << 6) | (_configParams[2] - 1));
-        var cnf2 = (byte)(0x80 | LINE_SAMPLING_3x | (_configParams[4] - 1) << 3 | _configParams[3] - 1); // 0x80 == BTLMODE bit, must be set per AppNote 739
-        var cnf3 = (byte)(WAKE_NOISE_FILTER | _configParams[5] - 1);
-        WriteRegister(Registers.CNF1, cnf1);
-        WriteRegister(Registers.CNF2, cnf2);
-        WriteRegister(Registers.CNF3, cnf3);
+        var cnf = new byte[3];
+
+        // regisers are in reverse order in memory
+        cnf[2] = (byte)(((_configParams[6] - 1) << 6) | (_configParams[2] - 1)); // REG CNF3
+        cnf[1] = (byte)(0x80 | LINE_SAMPLING_3x | (_configParams[4] - 1) << 3 | _configParams[3] - 1); // 0x80 == BTLMODE bit, must be set per AppNote 739
+        cnf[0] = (byte)(WAKE_NOISE_FILTER | _configParams[5] - 1);
+        WriteRegister(Registers.CNF3, cnf);
+        Resolver.Log.Info($"CFN3-1: {cnf[0]:x2} | {cnf[1]:x2} | {cnf[2]:x2}");
+
+        Span<byte> buffer = stackalloc byte[3];
+        ReadRegisters(Registers.CNF3, buffer);
+        Resolver.Log.Info($"CFN3-1: {BitConverter.ToString(buffer.ToArray())}");
     }
 
-    private Status ReadStatus()
+    private (InterruptStatus interrupt, Mode mode) ReadStatus()
     {
-        Span<byte> buffer = stackalloc byte[1];
-        _spiBus.Write((byte)Instructions.READ_STATUS);
-        _spiBus.Read(buffer);
-        return (Status)buffer[0];
+        ReportRegisters(Registers.CNF3, 6);
+        ReportRegisters(Registers.CANSTAT, 2);
+
+        Span<byte> txBuffer = stackalloc byte[2];
+        txBuffer[0] = (byte)Instructions.READ;
+        txBuffer[1] = (byte)Registers.CANSTAT;
+        Span<byte> rxBuffer = stackalloc byte[1];
+        _comms.Exchange(txBuffer, rxBuffer);
+
+        return ((InterruptStatus)(rxBuffer[0] & (byte)BitMasks.CANSTAT_ICOD), (Mode)(rxBuffer[0] & (byte)BitMasks.CANSTAT_OPMODE));
     }
 
     private void SendInstruction(Instructions instruction)
     {
-        _spiBus.Write((byte)instruction);
+        _comms.Write((byte)instruction);
     }
 
     private void ModifyRegister(Registers register, BitMasks mask, Mode mode)
@@ -222,7 +270,7 @@ public partial class Mcp2515 : ISpiPeripheral
         buffer[2] = (byte)mask;
         buffer[3] = (byte)mode;
 
-        _spiBus.Write(buffer);
+        _comms.Write(buffer);
     }
 
     private void ModifyRegister(Registers register, BitMasks mask, RegisterBits data)
@@ -233,7 +281,9 @@ public partial class Mcp2515 : ISpiPeripheral
         buffer[2] = (byte)mask;
         buffer[3] = (byte)data;
 
-        _spiBus.Write(buffer);
+        Resolver.Log.Info($"Writing {BitConverter.ToString(buffer.ToArray())}");
+
+        _comms.Write(buffer);
     }
 
     private void WriteRegister(Registers startRegister, byte value)
@@ -243,7 +293,9 @@ public partial class Mcp2515 : ISpiPeripheral
         buffer[1] = (byte)startRegister;
         buffer[2] = value;
 
-        _spiBus.Write(buffer);
+        Resolver.Log.Info($"Writing {BitConverter.ToString(buffer.ToArray())}");
+
+        _comms.Write(buffer);
     }
 
     private void WriteRegister(Registers startRegister, byte[] value)
@@ -252,7 +304,10 @@ public partial class Mcp2515 : ISpiPeripheral
         buffer[0] = (byte)Instructions.WRITE;
         buffer[1] = (byte)startRegister;
         value.AsSpan().CopyTo(buffer[2..]);
-        _spiBus.Write(buffer);
+
+        Resolver.Log.Info($"Writing {BitConverter.ToString(buffer.ToArray())}");
+
+        _comms.Write(buffer);
     }
 
     private void ReadRegisters(Registers startRegister, Span<byte> rxBuffer)
@@ -260,8 +315,6 @@ public partial class Mcp2515 : ISpiPeripheral
         Span<byte> txBuffer = stackalloc byte[2];
         txBuffer[0] = (byte)Instructions.READ;
         txBuffer[1] = (byte)startRegister;
-        _spiBus.Write(txBuffer);
-
-        _spiBus.Read(rxBuffer);
+        _comms.Exchange(txBuffer, rxBuffer);
     }
 }

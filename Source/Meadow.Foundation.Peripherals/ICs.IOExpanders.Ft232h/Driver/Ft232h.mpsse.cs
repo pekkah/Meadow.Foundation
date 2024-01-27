@@ -162,7 +162,7 @@ internal class MpsseImpl : IFtdiImpl
         }
 
         // update the global mask to make this an output
-        _activeBus!.GpioDirectionMask |= (byte)pin.Key;
+        _activeBus!.GpioDirectionMask |= (byte)(ushort)pin.Key;
 
         // update the direction
         Native.Mpsse.FT_WriteGPIO(_activeBus.Handle, _activeBus.GpioDirectionMask, 0);
